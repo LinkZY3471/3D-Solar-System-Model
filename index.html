@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <link rel="icon" type="image/png" href="img/sun.png">
+    <title>My Solar System</title>
+    <style>
+        body {
+            margin: 0;
+        }
+
+        #search-container {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+        }
+
+        .label {
+            color: rgb(255, 255, 255);
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border-style: solid;
+            border-width: 2px;
+            font-size: 18px;
+            display: block;
+            cursor: pointer;
+            z-index: 1;
+        }
+
+    </style>
+</head>
+
+<body>
+    <script type="module" src="src/main.js"></script>
+    <div id="search-container">
+        <input type="text" id="search-input" placeholder="Search for Planet...">
+    </div>
+</body>
+
+</html>
