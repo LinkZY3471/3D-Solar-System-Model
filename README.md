@@ -7,6 +7,7 @@ The data and formulas come from [NASA JPL](https://ssd.jpl.nasa.gov/planets/).
 The textures come from [Solar System Scope](https://www.solarsystemscope.com/textures/).
 
 ## Usage
+Requiring Node.js.  
 run `npx vite` in the terminal and then click the address.
 
 ## A Video Demo
@@ -21,6 +22,7 @@ run `npx vite` in the terminal and then click the address.
 纹理贴图来自 [Solar System Scope](https://www.solarsystemscope.com/textures/)。
 
 ## 使用
+需要Node.js环境。  
 在终端运行 `npx vite`，然后点击地址。
 
 ## 视频展示
