@@ -4,14 +4,14 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 
 import * as dat from 'dat.gui'
 
-import { getPlanetPosition, createOrbit, createSprite, createSun, createPlanet, createUniverse, createRing } from './utils';
+import { getPlanetPosition, setPlanetOrientation, updateRingShadow, createOrbit, createSprite, createSun, createPlanet, createUniverse, createRing } from './utils';
 import { planetData } from './dats';
 
 
 // 初始化
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.001, 1000000000);
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.001, 1000000000);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -55,9 +55,9 @@ scene.add(pointLight);
 let planets = {};
 
 const universe = createUniverse(planetData.universe.name, planetData.universe.radius);
-const saturnRing = createRing(planetData.saturn.ringName, planetData.saturn.innerRing, planetData.saturn.outerRing);
-const uranusRing = createRing(planetData.uranus.ringName, planetData.uranus.innerRing, planetData.uranus.outerRing);
-const neptuneRing = createRing(planetData.neptune.ringName, planetData.neptune.innerRing, planetData.neptune.outerRing);
+const saturnRing = createRing(planetData.saturn.ringName, planetData.saturn.innerRing, planetData.saturn.outerRing, planetData.saturn.radius);
+const uranusRing = createRing(planetData.uranus.ringName, planetData.uranus.innerRing, planetData.uranus.outerRing, planetData.uranus.radius);
+const neptuneRing = createRing(planetData.neptune.ringName, planetData.neptune.innerRing, planetData.neptune.outerRing, planetData.neptune.radius);
 const sun = createSun(planetData.sun.name, planetData.sun.radius);
 const sunHalo = createSprite('sun-glow');
 //console.log(sunHalo);
@@ -84,6 +84,11 @@ planets.neptune = neptune;
 saturn.add(saturnRing);
 uranus.add(uranusRing);
 neptune.add(neptuneRing);
+const ringedPlanets = [
+    { planet: saturn, ring: saturnRing },
+    { planet: uranus, ring: uranusRing },
+    { planet: neptune, ring: neptuneRing }
+];
 const planetGroup = new THREE.Group();
 planetGroup.add(mercury, venus, earth, mars, jupiter, saturn, uranus, neptune);
 scene.add(universe, sun, planetGroup);
@@ -277,17 +282,21 @@ function updateSpriteSize(sprite) {
 }
 
 let simulatedDate = new Date();
-let rotationSpeeds = {};
+let rotationDate = new Date(simulatedDate);
 
-const updatePlanets = (delta, speed) => {
+const updatePlanets = () => {
     for (const name in planets) {
         const position = getPlanetPosition(name, simulatedDate);
         planets[name].position.copy(position);
 
-        // 自转速度
-        rotationSpeeds[name] = (2 * Math.PI) / (planetData[name].day * 3600) * speed;
-        planets[name].children[0].rotation.y += rotationSpeeds[name] * delta;
+        setPlanetOrientation(planets[name], name, rotationDate);
     };
+}
+
+const updateRingShadows = () => {
+    for (const { planet, ring } of ringedPlanets) {
+        updateRingShadow(ring, planet);
+    }
 }
 
 
@@ -297,7 +306,9 @@ const animate = () => {
 
     const delta = clock.getDelta();
     simulatedDate = new Date(simulatedDate.getTime() + options.SpeedRevolution);
-    updatePlanets(delta, options.SpeedRotation);
+    rotationDate = new Date(rotationDate.getTime() + delta * 1000 * options.SpeedRotation);
+    updatePlanets();
+    updateRingShadows();
     updateSpriteSize(sunHalo);
     updateVisibility(list);
     controls.update();

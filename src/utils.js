@@ -17,6 +17,166 @@ const degreesToRadians = (degrees) => {
     return degrees * (Math.PI / 180);
 }
 
+const normalizeDegrees = (degrees) => {
+    return ((degrees % 360) + 360) % 360;
+}
+
+const evaluatePolynomial = (coefficients, value) => {
+    return coefficients.reduce((sum, coefficient, index) => sum + coefficient * (value ** index), 0);
+}
+
+const evaluateTrigSeries = (coefficients = [], phases = [], trigFn) => {
+    let sum = 0;
+    const count = Math.min(coefficients.length, phases.length);
+    for (let i = 0; i < count; i++) {
+        sum += coefficients[i] * trigFn(phases[i]);
+    }
+    return sum;
+}
+
+const getPlanetRotationElements = (name, date) => {
+    const model = planetData[name]?.rotation;
+    if (!model) {
+        return null;
+    }
+
+    const JD = julianDate(date);
+    const d = JD - planetData.common.J2000;
+    const T = d / planetData.common.DAYS_PER_CENTURY;
+    const phaseSource = model.nutationAngles ? planetData.rotationAngles[model.nutationAngles] : [];
+    const phases = phaseSource.map((phase) => degreesToRadians(evaluatePolynomial(phase, T)));
+
+    const poleRa = evaluatePolynomial(model.poleRa, T) + evaluateTrigSeries(model.raSin, phases, Math.sin);
+    const poleDec = evaluatePolynomial(model.poleDec, T) + evaluateTrigSeries(model.decCos, phases, Math.cos);
+    const primeMeridian = evaluatePolynomial(model.primeMeridian, d) + evaluateTrigSeries(model.pmSin, phases, Math.sin);
+
+    return {
+        poleRa: normalizeDegrees(poleRa),
+        poleDec,
+        primeMeridian: normalizeDegrees(primeMeridian)
+    };
+}
+
+const equatorialToScene = (vector) => {
+    const obliquity = degreesToRadians(planetData.common.J2000_OBLIQUITY);
+    const cosObliquity = Math.cos(obliquity);
+    const sinObliquity = Math.sin(obliquity);
+
+    const eclipticX = vector.x;
+    const eclipticY = cosObliquity * vector.y + sinObliquity * vector.z;
+    const eclipticZ = -sinObliquity * vector.y + cosObliquity * vector.z;
+
+    return new THREE.Vector3(eclipticY, eclipticZ, eclipticX).normalize();
+}
+
+const getPlanetOrientation = (name, date) => {
+    const elements = getPlanetRotationElements(name, date);
+    if (!elements) {
+        return null;
+    }
+
+    const poleRa = degreesToRadians(elements.poleRa);
+    const poleDec = degreesToRadians(elements.poleDec);
+    const primeMeridian = degreesToRadians(elements.primeMeridian);
+
+    const bodyToEquatorial = new THREE.Matrix4().makeRotationZ(Math.PI / 2 + poleRa);
+    bodyToEquatorial.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2 - poleDec));
+    bodyToEquatorial.multiply(new THREE.Matrix4().makeRotationZ(primeMeridian));
+
+    // THREE.SphereGeometry is Y-up; IAU body frames are Z-up.
+    bodyToEquatorial.multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+
+    const xAxis = equatorialToScene(new THREE.Vector3(1, 0, 0).applyMatrix4(bodyToEquatorial));
+    const yAxis = equatorialToScene(new THREE.Vector3(0, 1, 0).applyMatrix4(bodyToEquatorial));
+    const zAxis = equatorialToScene(new THREE.Vector3(0, 0, 1).applyMatrix4(bodyToEquatorial));
+    const sceneBasis = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+
+    return new THREE.Quaternion().setFromRotationMatrix(sceneBasis);
+}
+
+const setPlanetOrientation = (group, name, date) => {
+    const orientation = getPlanetOrientation(name, date);
+    if (orientation) {
+        group.quaternion.copy(orientation);
+    }
+}
+
+const configureRingShadowMaterial = (material, planetRadius) => {
+    const uniforms = {
+        uPlanetRadius: { value: planetRadius },
+        uShadowSoftness: { value: planetRadius * 0.08 },
+        uShadowStrength: { value: 0.7 },
+        uShadowLightDirection: { value: new THREE.Vector3(1, 0, 0) }
+    };
+
+    material.onBeforeCompile = (shader) => {
+        Object.assign(shader.uniforms, uniforms);
+
+        shader.vertexShader = shader.vertexShader
+            .replace(
+                '#include <common>',
+                '#include <common>\nvarying vec3 vRingLocalPosition;'
+            )
+            .replace(
+                '#include <begin_vertex>',
+                '#include <begin_vertex>\nvRingLocalPosition = position;'
+            );
+
+        shader.fragmentShader = shader.fragmentShader
+            .replace(
+                '#include <common>',
+                [
+                    '#include <common>',
+                    'uniform vec3 uShadowLightDirection;',
+                    'uniform float uPlanetRadius;',
+                    'uniform float uShadowSoftness;',
+                    'uniform float uShadowStrength;',
+                    'varying vec3 vRingLocalPosition;'
+                ].join('\n')
+            )
+            .replace(
+                '#include <opaque_fragment>',
+                [
+                    '#include <opaque_fragment>',
+                    'vec3 shadowDirection = normalize(uShadowLightDirection);',
+                    'float shadowAlong = dot(vRingLocalPosition, shadowDirection);',
+                    'vec3 closestShadowAxisPoint = vRingLocalPosition - shadowDirection * shadowAlong;',
+                    'float shadowDistance = length(closestShadowAxisPoint);',
+                    'float shadowEdge = 1.0 - smoothstep(uPlanetRadius - uShadowSoftness, uPlanetRadius + uShadowSoftness, shadowDistance);',
+                    'float planetShadow = step(0.0, shadowAlong) * shadowEdge * uShadowStrength;',
+                    'gl_FragColor.rgb *= 1.0 - planetShadow;'
+                ].join('\n')
+            );
+    };
+    material.customProgramCacheKey = () => 'planet-ring-shadow-v1';
+
+    return uniforms;
+}
+
+const ringShadowPlanetPosition = new THREE.Vector3();
+const ringShadowSunPosition = new THREE.Vector3();
+const ringShadowWorldDirection = new THREE.Vector3();
+const ringShadowLocalDirection = new THREE.Vector3();
+const ringShadowWorldQuaternion = new THREE.Quaternion();
+
+const updateRingShadow = (ring, planetGroup, sunPosition = ringShadowSunPosition) => {
+    const uniforms = ring.userData.ringShadowUniforms;
+    if (!uniforms) {
+        return;
+    }
+
+    planetGroup.getWorldPosition(ringShadowPlanetPosition);
+    ringShadowWorldDirection.copy(ringShadowPlanetPosition).sub(sunPosition);
+    if (ringShadowWorldDirection.lengthSq() === 0) {
+        return;
+    }
+
+    ringShadowWorldDirection.normalize();
+    ring.getWorldQuaternion(ringShadowWorldQuaternion).invert();
+    ringShadowLocalDirection.copy(ringShadowWorldDirection).applyQuaternion(ringShadowWorldQuaternion).normalize();
+    uniforms.uShadowLightDirection.value.copy(ringShadowLocalDirection);
+}
+
 const keplerEquationSolver = (M, e) => {
     let E = M + e * Math.sin(M) * (1.0 + e * Math.cos(M));
     let E0;
@@ -143,20 +303,10 @@ const createPlanet = (name, radius) => {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
 
-    // 自转轴倾角指向
-    const group = new THREE.Group(); // 这样方便使用局部坐标系来自转
+    const group = new THREE.Group();
     group.add(mesh);
 
-    const axialTilt = THREE.MathUtils.degToRad(planetData[name].inc);
-    const axialDir = THREE.MathUtils.degToRad(planetData[name].dir);
-    group.rotation.z = -axialTilt;
-    group.rotation.x = axialDir;
-
-    // 获取当前UTC时间并计算当前自转角度，微调参数保证准确
-    const now = new Date();
-    const secondsSinceMidnight = now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds() - 3600 * planetData[name].hoursLapse;
-    const rotationAngle = (secondsSinceMidnight / (planetData[name].day * 3600)) * 2 * Math.PI;
-    mesh.rotation.y = rotationAngle; // 设置初始自转角度，使得当前时间对应的地点正对太阳
+    setPlanetOrientation(group, name, new Date());
 
     return group;
 };
@@ -172,7 +322,7 @@ const createUniverse = (name, radius) => {
     return mesh;
 };
 
-const createRing = (name, innerRadius, outerRadius) => {
+const createRing = (name, innerRadius, outerRadius, planetRadius) => {
     const ringTextureLoader = new THREE.TextureLoader();
     const ringTexture = ringTextureLoader.load(`/assets/${name}.png`);
     ringTexture.colorSpace = THREE.SRGBColorSpace;
@@ -195,7 +345,9 @@ const createRing = (name, innerRadius, outerRadius) => {
         side: THREE.DoubleSide,
         transparent: true
     });
+    const ringShadowUniforms = configureRingShadowMaterial(ringMaterial, planetRadius);
     const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+    ring.userData.ringShadowUniforms = ringShadowUniforms;
 
     ring.castShadow = true;
     ring.receiveShadow = true;
@@ -212,4 +364,4 @@ const createGroup = (body) => {
     return group;
 };
 
-export { getPlanetPosition, createOrbit, createSprite, createSun, createPlanet, createUniverse, createRing, createGroup };
+export { getPlanetPosition, getPlanetRotationElements, setPlanetOrientation, updateRingShadow, createOrbit, createSprite, createSun, createPlanet, createUniverse, createRing, createGroup };
